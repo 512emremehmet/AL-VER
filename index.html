@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>🎪 Will It Rain On My Parade? — NASA Climate ML Dashboard</title>
+  <link href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" rel="stylesheet"/>
+  <style>
+    body { font-family: Inter, Arial, sans-serif; background:#0b1220; color:#e6eef8; margin:0; padding:18px; }
+    #map { height:440px; border-radius:10px; box-shadow: 0 6px 18px rgba(0,0,0,0.5); }
+    .controls { display:flex; gap:8px; margin:12px 0; flex-wrap:wrap; align-items:center; }
+    .controls-group { display: flex; gap: 8px; align-items: center; background: #071021; padding: 6px 12px; border-radius: 8px; border: 1px solid #15202b; }
+    input[type="date"] { padding: 7px; background:#071827; border:1px solid #233042; color:#e6eef8; border-radius:6px; }
+    input, button, select { padding:8px; border-radius:6px; border:1px solid #233042; background:#0f1724; color:#e6eef8; }
+    button { background:#2563eb; border:none; color:white; cursor:pointer; }
+    button:disabled { opacity:0.6; cursor: not-allowed; }
+    .card { background:#071021; padding:16px; border-radius:8px; border:1px solid #15202b; margin-top:12px; }
+    .metric-item { display: inline-block; margin-right: 15px; font-size: 0.95em; margin-bottom: 5px; color:#cbd5e1; }
+    .metric-value { font-weight: bold; color: #10b981; margin-left:6px; }
+    .forecast-detail-card { margin-top: 10px; padding: 10px; background: #15202b; border-radius: 6px; }
+    .forecast-detail-item { margin-bottom: 5px; }
+    .summary-section { margin-top: 10px; border-top: 1px solid #15202b; padding-top: 10px; }
+    .summary-item { margin-bottom: 5px; font-size: 0.95em; color:#bcd3ea; }
+    .summary-alert { color: #f97316; font-weight: bold; padding: 8px 10px; border-radius:6px; background: rgba(249,115,22,0.06); margin-top: 8px; border:1px dashed rgba(249,115,22,0.18); }
+    .small-muted { font-size:0.85em; color:#94a3b8; }
+  </style>
+</head>
+<body>
+  <h1>🎪 Will It Rain On My Parade? — Multi-Target ML Forecast</h1>
+  <p class="small-muted">Click anywhere on the map → Get multi-variable forecasts (Temperature, Precipitation, Wind) and up to 180-day prediction.</p>
+
+  <div class="controls">
+    <input id="cityInput" placeholder="City (e.g. London)" />
+    <button id="searchCityBtn">Search City</button>
+    <button id="downloadJSON">Download JSON</button>
+  </div>
+  
+  <div class="controls-group">
+      <span style="color:#9fb2cf; margin-right:8px;">Single-day temperature forecast:</span>
+      <input type="date" id="targetDateInput" />
+      <button id="forecastDateBtn">Forecast Selected Date</button>
+      <div id="singleForecastResult" style="color:#10b981; font-weight:bold; margin-left: 10px;"></div>
+  </div>
+
+  <div style="height:12px;"></div>
+  <div id="map"></div>
+
+  <div class="card" style="margin-top:14px;">
+    <h3 style="margin:0">Forecast Summary & Multi-Model Metrics</h3>
+
+    <div id="topRow" style="display:flex; gap:12px; align-items:flex-start; margin-top:10px;">
+      <div style="flex:1">
+        <div id="metrics" style="margin-top:8px; margin-bottom: 8px; border-bottom: 1px solid #233042; padding-bottom: 8px;">
+            <span class="small-muted">Model metrics will appear here.</span>
+        </div>
+        <div id="summary" style="margin-top:8px;color:#bcd3ea">No data yet. Select a point or search a city.</div>
+      </div>
+      <div style="width:620px;">
+        <canvas id="predictionChart" height="220"></canvas>
+      </div>
+    </div>
+
+    <div id="singleForecastDetails" class="forecast-detail-card" style="display:none;">
+        <h4 style="margin-top: 0; color: #10b981;">Selected Day Forecast Details:</h4>
+        <div id="forecastDetailsContent"></div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+
+  <script>
+    const API = "http://127.0.0.1:8000"; // backend adresi
+
+    const map = L.map('map').setView([39.0, 35.0], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    let marker = null;
+    let currentData = null;
+    let chartInstance = null;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const today = new Date().toISOString().split('T')[0];
+      document.getElementById('targetDateInput').value = today;
+    });
+
+    map.on('click', (e) => {
+      const { lat, lng } = e.latlng;
+      if (marker) marker.remove();
+      marker = L.marker([lat, lng]).addTo(map);
+      fetchPredict(lat, lng);
+      document.getElementById('singleForecastResult').textContent = '';
+      document.getElementById('singleForecastDetails').style.display = 'none';
+    });
+
+    document.getElementById('searchCityBtn').addEventListener('click', async () => {
+      const city = document.getElementById('cityInput').value.trim();
+      if(!city) return alert('Enter a city name.');
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=json&limit=1`);
+      const data = await res.json();
+      if(!data.length) return alert('City not found.');
+      const { lat, lon } = data[0];
+      map.setView([lat, lon], 10);
+      if(marker) marker.remove();
+      marker = L.marker([lat, lon]).addTo(map);
+      fetchPredict(lat, lon);
+    });
+
+    async function fetchPredict(lat, lon) {
+      try {
+        document.getElementById('summary').textContent = 'Fetching prediction...';
+        document.getElementById('metrics').innerHTML = 'Loading...';
+        const res = await fetch(`${API}/predict?lat=${lat}&lon=${lon}`);
+        if(!res.ok) throw new Error('Server Error ' + res.status);
+        const data = await res.json();
+        currentData = data;
+
+        renderMetrics(data.metrics);
+        renderSummary(data);
+        renderChart(data);
+
+      } catch(err) {
+        document.getElementById('summary').textContent = 'Forecast failed.';
+        document.getElementById('metrics').innerHTML = '<span style="color:#ef4444;">Metrics unavailable.</span>';
+        if (chartInstance) chartInstance.destroy();
+      }
+    }
+
+    function renderMetrics(metrics={}) {
+      if (!metrics || Object.keys(metrics).length === 0) {
+        document.getElementById('metrics').innerHTML = '<span class="small-muted">No metrics available.</span>';
+        return;
+      }
+      let html = '';
+      for (const [key, val] of Object.entries(metrics)) {
+        html += `<div class="metric-item">${key}: <span class="metric-value">${val.toFixed(3)}</span></div>`;
+      }
+      document.getElementById('metrics').innerHTML = html;
+    }
+
+    function renderSummary(data) {
+      document.getElementById('summary').innerHTML =
+        `<b>Best Days:</b> ${data.best_days || '-'}<br>
+         <b>Risk Score:</b> ${data.risk_score || 'N/A'}<br>
+         <b>Mean Temp:</b> ${(data.mean_temp || 0).toFixed(1)}°C`;
+    }
+
+    function renderChart(data) {
+      const ctx = document.getElementById('predictionChart').getContext('2d');
+      if (chartInstance) chartInstance.destroy();
+
+      const temp = data.forecasts?.T2M || [];
+      const labels = temp.map((_, i) => `Day ${i+1}`);
+      chartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Temperature (°C)',
+            data: temp,
+            borderColor: '#38bdf8',
+            fill: false,
+            tension: 0.25
+          }]
+        },
+        options: {
+          scales: { x: { ticks: { color:'#94a3b8' } }, y: { ticks: { color:'#94a3b8' } } },
+          plugins: { legend: { labels: { color:'#e2e8f0' } } }
+        }
+      });
+    }
+
+    document.getElementById('forecastDateBtn').addEventListener('click', async () => {
+      if (!marker) return alert('Select a point first.');
+      const { lat, lng } = marker.getLatLng();
+      const targetDate = document.getElementById('targetDateInput').value;
+      try {
+        document.getElementById('singleForecastResult').textContent = 'Predicting...';
+        const res = await fetch(`${API}/forecast?lat=${lat}&lon=${lng}&target_date=${targetDate}`);
+        if(!res.ok) throw new Error('Forecast failed');
+        const data = await res.json();
+        document.getElementById('singleForecastResult').textContent =
+          `${data.target_date}: ${data.prediction_T2M}°C`;
+        document.getElementById('singleForecastDetails').style.display = 'block';
+        document.getElementById('forecastDetailsContent').innerHTML =
+          `<div>Temperature: ${data.prediction_T2M}°C</div>
+           <div>Precipitation: ${data.prediction_PRECTOT} mm</div>
+           <div>Wind: ${data.prediction_WS10M} m/s</div>`;
+      } catch(e) {
+        document.getElementById('singleForecastResult').textContent = 'Forecast failed.';
+      }
+    });
+  </script>
+</body>
+</html>
