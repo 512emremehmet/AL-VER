@@ -30,5 +30,4 @@ Will It Rain On My Parade? is a NASA-backed ML dashboard that forecasts precipit
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/will-it-rain-on-my-parade.git
-cd will-it-rain-on-my-parade
+git clone 
